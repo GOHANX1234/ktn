@@ -18,7 +18,7 @@ object Main {
      */
     @JvmStatic
     fun StartWithoutPermission(context: Context) {
-        CrashHandler.init(context, true)
+        CrashHandler.init(context)
         if (context is Activity) {
             val menu = Menu(context)
             menu.setWindowManagerActivity()
@@ -33,7 +33,7 @@ object Main {
      */
     @JvmStatic
     fun Start(context: Context) {
-        CrashHandler.init(context, false)
+        CrashHandler.init(context)
         CheckOverlayPermission(context)
     }
 }
