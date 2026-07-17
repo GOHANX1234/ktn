@@ -1,6 +1,7 @@
 package com.android.support
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import android.widget.Toast
@@ -18,7 +19,7 @@ object CrashHandler {
         Thread.getDefaultUncaughtExceptionHandler()
 
     @JvmStatic
-    fun init(app: Context, overlayRequired: Boolean) {
+    fun init(app: Context) {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             Log.e("AppCrash", "Error just launched")
             try {
@@ -48,7 +49,12 @@ object CrashHandler {
         var versionName = "unknown"
         var versionCode = 0L
         try {
-            val packageInfo = app.packageManager.getPackageInfo(app.packageName, 0)
+            val packageInfo = if (Build.VERSION.SDK_INT >= 33) {
+                app.packageManager.getPackageInfo(app.packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                app.packageManager.getPackageInfo(app.packageName, 0)
+            }
             versionName = packageInfo.versionName
             versionCode = if (Build.VERSION.SDK_INT >= 28)
                 packageInfo.longVersionCode
