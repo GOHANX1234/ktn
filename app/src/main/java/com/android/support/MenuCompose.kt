@@ -572,7 +572,7 @@ private fun IGuiSeekBarRow(item: FeatureItem.SeekBarItem) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, top = 5.dp, bottom = 2.dp)
+            .padding(start = 8.dp, end = 8.dp, top = 5.dp, bottom = 2.dp)
     ) {
         Row(
             modifier              = Modifier.fillMaxWidth(),
