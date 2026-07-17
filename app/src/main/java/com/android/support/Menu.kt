@@ -98,6 +98,7 @@ class Menu(private val context: Context) {
      * Sets up a TYPE_APPLICATION window (used when the caller is an Activity).
      * Builds and attaches the Compose view immediately.
      */
+    @Suppress("DEPRECATION")
     fun setWindowManagerActivity() {
         vmParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
