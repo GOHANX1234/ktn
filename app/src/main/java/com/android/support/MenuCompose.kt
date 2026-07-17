@@ -9,6 +9,7 @@ import android.view.View
 import android.view.WindowManager
 import android.webkit.WebView
 import androidx.compose.animation.*
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -97,7 +98,7 @@ private class GestureState {
 //  5. Tap detection on the icon is handled explicitly in ACTION_UP: if
 //     isDragging is still false at UP time, the menu opens.
 // ─────────────────────────────────────────────────────────────────────────────
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalAnimationApi::class)
 @Composable
 fun FloatingMenu(
     overlay: Menu,
