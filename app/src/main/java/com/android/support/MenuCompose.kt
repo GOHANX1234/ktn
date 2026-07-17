@@ -2,6 +2,7 @@ package com.android.support
 
 import android.content.Context
 import android.content.Intent
+import com.android.support.R
 import android.net.Uri
 import android.os.Build
 import android.view.MotionEvent
@@ -14,6 +15,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -22,7 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -180,11 +184,11 @@ fun FloatingMenu(
             enter   = fadeIn(tween(120)),
             exit    = fadeOut(tween(100)),
         ) {
-            // Square icon, ImGui style: dark fill, green 1px border
+            // Square icon, ImGui style: 1px border, logo image fill
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(54.dp)
+                    .size(46.dp)
                     .alpha(menuAlpha)
                     .background(IBg)
                     .border(1.dp, IAccent)
@@ -221,31 +225,13 @@ fun FloatingMenu(
                         }
                     }
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    // "CX" — abbreviated "Cler X"
-                    Text(
-                        text          = "CX",
-                        color         = IAccent,
-                        fontSize      = 18.sp,
-                        fontWeight    = FontWeight.Bold,
-                        fontFamily    = FontFamily.Monospace,
-                        letterSpacing = 1.sp,
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    // Three pixel dots — drag indicator
-                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        repeat(3) {
-                            Box(
-                                Modifier
-                                    .size(3.dp)
-                                    .background(IAccent.copy(alpha = 0.5f))
-                            )
-                        }
-                    }
-                }
+                // Logo image fills the icon square
+                Image(
+                    painter           = painterResource(id = R.drawable.clerx_logo),
+                    contentDescription = "Cler X",
+                    contentScale      = ContentScale.Crop,
+                    modifier          = Modifier.fillMaxSize(),
+                )
             }
         }
 
