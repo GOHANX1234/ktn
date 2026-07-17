@@ -12,8 +12,8 @@ import androidx.compose.animation.*
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -22,16 +22,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -42,83 +41,109 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Colour palette
+//  ImGui-inspired colour palette
+//  Flat, matte, dark — no gradients, no shadows, no Material bloat
 // ─────────────────────────────────────────────────────────────────────────────
-private val CText        = Color(0xFFFFFFFF)
-private val CTextSub     = Color(0xFFB0B0C8)
-private val CBtnBg       = Color(0xFF1E1E32)
-private val CMenuBg      = Color(0xF20D0D1A)   // nearly-opaque dark
-private val CFeatureBg   = Color(0xFF111120)
-private val CToggleOn    = Color(0xFF32CB00)
-private val CToggleOff   = Color(0xFF2A2A3E)
-private val CBtnOn       = Color(0xFF1A5200)
-private val CBtnOff      = Color(0xFF1E1E32)
-private val CCategoryBg  = Color(0xFF1A1A2E)
-private val CCollapseBg  = Color(0xFF161626)
-private val CBorder      = Color(0xFF32CB00)
-private val CHeaderBg    = Color(0xFF090914)
+private val IBg          = Color(0xFF1A1A1A)   // main window bg
+private val ITitleBg     = Color(0xFF242424)   // title bar
+private val IFrameBg     = Color(0xFF0F0F0F)   // inset / frame background
+private val IChildBg     = Color(0xFF161616)   // scroll area bg
+private val IBorderMute  = Color(0xFF3A3A3A)   // neutral 1px borders
+private val IText        = Color(0xFFDEDEDE)   // primary text
+private val ITextDim     = Color(0xFF888888)   // secondary / dimmed text
+private val IAccent      = Color(0xFF32CB00)   // green accent
+private val IAccentDark  = Color(0xFF1B4500)   // dark green fill for ON buttons
+private val ISep         = Color(0xFF2A2A2A)   // separator lines
+private val ICatBg       = Color(0xFF1F1F1F)   // category row bg
+private val IColBg       = Color(0xFF141414)   // collapse child bg
+private val IButtonBg    = Color(0xFF252525)   // button face
 
-private val MenuCorner  = 14.dp
-private val MenuWidth   = 290.dp
-private val MenuScrollH = 220.dp
+private val MenuWidth  = 285.dp
+private val MenuRadius = RoundedCornerShape(0.dp)   // ImGui is square
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Gesture state — plain (non-Compose-state) object so mutations never
-//  trigger recomposition and survive recompositions via remember {}
+//  Gesture tracking (plain class — mutations never trigger recomposition)
 // ─────────────────────────────────────────────────────────────────────────────
 private class GestureState {
-    var startRawX  = 0f
-    var startRawY  = 0f
-    var initWinX   = 0f
-    var initWinY   = 0f
+    var startRawX  = 0f ; var startRawY  = 0f
+    var initWinX   = 0f ; var initWinY   = 0f
     var isDragging = false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Root composable — the complete floating overlay
-//
-//  BUG FIXES vs. the original implementation:
-//
-//  1. Drag now uses MotionEvent.rawX/rawY (absolute screen coordinates) via
-//     pointerInteropFilter. The original used local Compose coordinates; when
-//     updateViewLayout() moved the window, the next event's local coords were
-//     shifted by the opposite amount, causing oscillation/shaking.
-//
-//  2. Each drag handler returns true on ACTION_DOWN to reliably CLAIM the
-//     gesture stream. Without claiming, subsequent MOVE/UP delivery is not
-//     guaranteed by the Android event-dispatch model.
-//
-//  3. The title-bar drag handler is scoped only to the title+dots Box inside
-//     a Row; the settings gear lives as a sibling outside that Box and retains
-//     its own independent clickable — no conflicts or blocked touches.
-//
-//  4. The scroll area (verticalScroll Column) has no drag modifier at all, so
-//     scroll gestures are delivered to it unimpeded.
-//
-//  5. Tap detection on the icon is handled explicitly in ACTION_UP: if
-//     isDragging is still false at UP time, the menu opens.
+//  Reusable clickable with NO ripple (ImGui feel)
+// ─────────────────────────────────────────────────────────────────────────────
+private fun Modifier.noRippleClickable(onClick: () -> Unit): Modifier =
+    this.clickable(
+        interactionSource = MutableInteractionSource(),
+        indication        = null,
+        onClick           = onClick,
+    )
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Small ImGui-style checkbox  (replaces Material Switch)
+//  A 15×15dp bordered square: empty when OFF, filled + "✓" when ON
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun ImGuiCheckbox(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(15.dp)
+            .background(if (checked) IAccent else IFrameBg)
+            .border(1.dp, if (checked) IAccent else IBorderMute)
+            .noRippleClickable { onCheckedChange(!checked) },
+    ) {
+        if (checked) {
+            Text(
+                text       = "✓",
+                color      = Color.Black,
+                fontSize   = 9.sp,
+                fontWeight = FontWeight.ExtraBold,
+                lineHeight = 9.sp,
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Thin horizontal separator line
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun ImGuiSeparator() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(ISep)
+    )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Root floating-overlay composable
 // ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalAnimationApi::class)
 @Composable
 fun FloatingMenu(
-    overlay: Menu,
-    windowManager: WindowManager,
-    vmParams: WindowManager.LayoutParams,
-    composeView: View,
-    title: String,
-    subTitle: String,
-    overlayRequired: Boolean,
+    overlay         : Menu,
+    windowManager   : WindowManager,
+    vmParams        : WindowManager.LayoutParams,
+    composeView     : View,
+    title           : String,   // still accepted (used for marquee subtitle fallback)
+    subTitle        : String,
+    overlayRequired : Boolean,
 ) {
-    // ── Compose UI state ──────────────────────────────────────────────────
     var isMenuExpanded by remember { mutableStateOf(false) }
     var isSettingsOpen by remember { mutableStateOf(false) }
     var menuAlpha      by remember { mutableStateOf(1f) }
 
-    // Window position — kept in sync with vmParams for the drag calculations
     var posX by remember { mutableStateOf(vmParams.x.toFloat()) }
     var posY by remember { mutableStateOf(vmParams.y.toFloat()) }
 
-    // Feature / settings loading
     var featureItems by remember { mutableStateOf<List<FeatureItem>>(emptyList()) }
     var settingItems by remember { mutableStateOf<List<FeatureItem>>(emptyList()) }
     var menuReady    by remember { mutableStateOf(false) }
@@ -135,11 +160,9 @@ fun FloatingMenu(
         menuReady    = true
     }
 
-    // ── Gesture state objects (remembered, mutated without triggering recompose)
     val iconGesture  = remember { GestureState() }
     val panelGesture = remember { GestureState() }
 
-    // Shared helper: apply raw-coordinate drag delta to the window
     fun applyDrag(state: GestureState, rawX: Float, rawY: Float) {
         posX = state.initWinX + (rawX - state.startRawX)
         posY = state.initWinY + (rawY - state.startRawY)
@@ -151,28 +174,20 @@ fun FloatingMenu(
     MaterialTheme {
     Box {
 
-        // ── Collapsed floating icon ───────────────────────────────────────
+        // ── Floating icon (collapsed) ─────────────────────────────────────
         AnimatedVisibility(
             visible = !isMenuExpanded,
-            enter   = fadeIn(tween(200)) + scaleIn(tween(200)),
-            exit    = fadeOut(tween(150)) + scaleOut(tween(150)),
+            enter   = fadeIn(tween(120)),
+            exit    = fadeOut(tween(100)),
         ) {
+            // Square icon, ImGui style: dark fill, green 1px border
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(54.dp)
                     .alpha(menuAlpha)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        Brush.radialGradient(
-                            listOf(Color(0xFF151528), Color(0xFF0A0A16))
-                        )
-                    )
-                    .border(2.dp, CBorder, RoundedCornerShape(16.dp))
-                    // ── Gesture handler ────────────────────────────────────
-                    // Returns true on ACTION_DOWN to CLAIM the gesture stream
-                    // so all subsequent MOVE/UP events are guaranteed to arrive.
-                    // The tap-to-open is handled explicitly in ACTION_UP.
+                    .background(IBg)
+                    .border(1.dp, IAccent)
                     .pointerInteropFilter { event ->
                         when (event.action) {
                             MotionEvent.ACTION_DOWN -> {
@@ -181,52 +196,52 @@ fun FloatingMenu(
                                 iconGesture.initWinX   = posX
                                 iconGesture.initWinY   = posY
                                 iconGesture.isDragging = false
-                                true   // ← claim the stream
+                                true
                             }
                             MotionEvent.ACTION_MOVE -> {
                                 val dx = abs(event.rawX - iconGesture.startRawX)
                                 val dy = abs(event.rawY - iconGesture.startRawY)
                                 if (iconGesture.isDragging || dx > 10f || dy > 10f) {
                                     iconGesture.isDragging = true
-                                    menuAlpha = 0.55f
+                                    menuAlpha = 0.50f
                                     applyDrag(iconGesture, event.rawX, event.rawY)
                                 }
                                 true
                             }
                             MotionEvent.ACTION_UP -> {
                                 menuAlpha = 1f
-                                if (!iconGesture.isDragging) {
-                                    // No movement → treat as a tap, open the menu
-                                    isMenuExpanded = true
-                                }
+                                if (!iconGesture.isDragging) isMenuExpanded = true
                                 iconGesture.isDragging = false
                                 true
                             }
                             MotionEvent.ACTION_CANCEL -> {
-                                menuAlpha = 1f
-                                iconGesture.isDragging = false
-                                true
+                                menuAlpha = 1f ; iconGesture.isDragging = false ; true
                             }
                             else -> false
                         }
                     }
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    // "CX" — abbreviated "Cler X"
                     Text(
-                        text          = "S3",
-                        color         = CToggleOn,
-                        fontSize      = 22.sp,
-                        fontWeight    = FontWeight.ExtraBold,
+                        text          = "CX",
+                        color         = IAccent,
+                        fontSize      = 18.sp,
+                        fontWeight    = FontWeight.Bold,
+                        fontFamily    = FontFamily.Monospace,
                         letterSpacing = 1.sp,
                     )
-                    // Three-dot drag indicator
+                    Spacer(Modifier.height(3.dp))
+                    // Three pixel dots — drag indicator
                     Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                         repeat(3) {
                             Box(
-                                modifier = Modifier
+                                Modifier
                                     .size(3.dp)
-                                    .clip(CircleShape)
-                                    .background(CToggleOn.copy(alpha = 0.6f))
+                                    .background(IAccent.copy(alpha = 0.5f))
                             )
                         }
                     }
@@ -237,41 +252,33 @@ fun FloatingMenu(
         // ── Expanded menu panel ───────────────────────────────────────────
         AnimatedVisibility(
             visible = isMenuExpanded,
-            enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
-            exit    = fadeOut(tween(150)) + shrinkVertically(tween(200)),
+            enter   = fadeIn(tween(120)) + expandVertically(tween(150)),
+            exit    = fadeOut(tween(100)) + shrinkVertically(tween(120)),
         ) {
             Column(
                 modifier = Modifier
                     .width(MenuWidth)
                     .wrapContentHeight()
                     .alpha(menuAlpha)
-                    .clip(RoundedCornerShape(MenuCorner))
-                    .background(CMenuBg)
-                    .border(1.5.dp, CBorder, RoundedCornerShape(MenuCorner))
-                // NOTE: NO drag modifier on the Column itself.
-                // Drag is confined to the title-bar Row so that the
-                // verticalScroll area below receives its gestures freely.
+                    .background(IBg)
+                    .border(1.dp, IBorderMute)
             ) {
+
                 // ── Title bar ─────────────────────────────────────────────
-                // Structure: Row { [drag area: dots + title (weight=1)] | [gear] }
-                //
-                // The drag pointerInteropFilter is on the weight=1 Box (center),
-                // which is a SIBLING of the gear Text in the Row.
-                // This means the gear's clickable is completely independent — it
-                // is never inside the drag handler's touch scope, so returning
-                // true on ACTION_DOWN does not block gear taps.
+                // Row: [drag area (weight=1): grip + "Cler X"] | [gear]
+                // Gear is a sibling — outside the drag scope entirely.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(CHeaderBg)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .background(ITitleBg)
+                        .height(34.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Drag handle: dots + title — takes all space except the gear
+                    // Drag area with title — claims the gesture stream on DOWN
                     Box(
-                        contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .weight(1f)
+                            .fillMaxHeight()
                             .pointerInteropFilter { event ->
                                 when (event.action) {
                                     MotionEvent.ACTION_DOWN -> {
@@ -280,14 +287,14 @@ fun FloatingMenu(
                                         panelGesture.initWinX   = posX
                                         panelGesture.initWinY   = posY
                                         panelGesture.isDragging = false
-                                        true  // ← claim the stream
+                                        true
                                     }
                                     MotionEvent.ACTION_MOVE -> {
                                         val dx = abs(event.rawX - panelGesture.startRawX)
                                         val dy = abs(event.rawY - panelGesture.startRawY)
                                         if (panelGesture.isDragging || dx > 6f || dy > 6f) {
                                             panelGesture.isDragging = true
-                                            menuAlpha = 0.55f
+                                            menuAlpha = 0.50f
                                             applyDrag(panelGesture, event.rawX, event.rawY)
                                         }
                                         true
@@ -300,53 +307,65 @@ fun FloatingMenu(
                                     }
                                     else -> false
                                 }
-                            }
+                            },
+                        contentAlignment = Alignment.CenterStart,
                     ) {
                         Row(
+                            modifier = Modifier.padding(start = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
                         ) {
-                            // Six-dot drag-grip indicator
-                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            // Grip dots (2×3 grid)
+                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                 repeat(2) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                         repeat(3) {
                                             Box(
-                                                modifier = Modifier
-                                                    .size(2.5.dp)
-                                                    .clip(CircleShape)
-                                                    .background(CBorder.copy(alpha = 0.5f))
+                                                Modifier
+                                                    .size(2.dp)
+                                                    .background(ITextDim)
                                             )
                                         }
                                     }
                                 }
                             }
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(7.dp))
+                            // "Cler X" — hardcoded per user request
                             Text(
-                                text          = title,
-                                color         = CToggleOn,
-                                fontSize      = 16.sp,
+                                text          = "Cler X",
+                                color         = IAccent,
+                                fontSize      = 13.sp,
                                 fontWeight    = FontWeight.Bold,
+                                fontFamily    = FontFamily.Monospace,
                                 letterSpacing = 0.5.sp,
                             )
                         }
                     }
 
-                    Spacer(Modifier.width(8.dp))
-
-                    // Settings gear — sibling of the drag Box, NOT nested inside it.
-                    // Has its own independent clickable; drag events never reach here.
-                    val gearColor = if (isSettingsOpen) CToggleOn else CTextSub
-                    Text(
-                        text       = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) "⚙" else "\uD83D\uDD27",
-                        color      = gearColor,
-                        fontSize   = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier   = Modifier.clickable { isSettingsOpen = !isSettingsOpen },
-                    )
+                    // Gear icon — independent sibling, never inside the drag scope
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(34.dp)
+                            .noRippleClickable { isSettingsOpen = !isSettingsOpen }
+                    ) {
+                        Text(
+                            text     = "⚙",
+                            color    = if (isSettingsOpen) IAccent else ITextDim,
+                            fontSize = 16.sp,
+                        )
+                    }
                 }
 
-                // Marquee subtitle
+                // Green 1px accent line under title
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(IAccent)
+                )
+
+                // Subtitle marquee
                 AndroidView(
                     factory = { ctx ->
                         android.widget.TextView(ctx).apply {
@@ -354,61 +373,50 @@ fun FloatingMenu(
                             marqueeRepeatLimit = -1
                             isSingleLine       = true
                             isSelected         = true
-                            textSize           = 10f
-                            gravity            = android.view.Gravity.CENTER
-                            setPadding(12, 0, 12, 4)
-                            setTextColor(android.graphics.Color.argb(180, 180, 180, 200))
-                            text = subTitle
+                            textSize           = 9.5f
+                            gravity            = android.view.Gravity.START
+                            setPadding(10, 3, 10, 3)
+                            setTextColor(android.graphics.Color.argb(180, 100, 100, 100))
+                            setBackgroundColor(android.graphics.Color.parseColor("#1A1A1A"))
+                            typeface = android.graphics.Typeface.MONOSPACE
+                            text = subTitle.ifBlank { title }
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .wrapContentHeight()
-                        .background(CHeaderBg)
+                        .wrapContentHeight(),
                 )
 
-                // Green accent divider under header
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.5.dp)
-                        .background(CBorder)
-                )
+                ImGuiSeparator()
 
-                // ── Feature / settings list ───────────────────────────────
-                // verticalScroll works here because there is NO drag modifier
-                // on this Box or its Column — drag is isolated to the title bar.
+                // ── Feature / settings scroll area ────────────────────────
                 val scrollMod = if (isScrollExpanded.value)
                     Modifier.weight(1f)
                 else
-                    Modifier.height(MenuScrollH)
+                    Modifier.height(224.dp)
 
-                Box(modifier = scrollMod.background(CFeatureBg)) {
+                Box(modifier = scrollMod.background(IChildBg)) {
                     val scrollState = rememberScrollState()
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(scrollState)
-                            .padding(vertical = 4.dp)
                     ) {
                         if (!menuReady) {
-                            CategoryRow(
-                                "Save preferences enabled.\n" +
-                                "Waiting for game lib to load…\n\n" +
-                                "Force load may not apply mods instantly. " +
-                                "Reactivate features after force loading."
+                            IGuiCategoryRow(
+                                "Waiting for game lib…\n" +
+                                "Force load may not apply mods instantly."
                             )
-                            Spacer(Modifier.height(6.dp))
-                            ButtonRow(
+                            ImGuiSeparator()
+                            IGuiButtonRow(
                                 name            = "Force Load Menu",
                                 featNum         = -100,
                                 onSpecialAction = { stopChecking = true },
-                                onCloseSettings = {},
                             )
                         } else {
                             val items = if (isSettingsOpen) settingItems else featureItems
                             items.forEach { item ->
-                                FeatureRow(
+                                IGuiFeatureRow(
                                     item             = item,
                                     overlayRequired  = overlayRequired,
                                     isScrollExpanded = isScrollExpanded,
@@ -420,29 +428,26 @@ fun FloatingMenu(
                     }
                 }
 
-                // ── Close button ──────────────────────────────────────────
+                ImGuiSeparator()
+
+                // ── Close bar ─────────────────────────────────────────────
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(CHeaderBg)
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .background(ITitleBg)
+                        .noRippleClickable { isMenuExpanded = false }
+                        .padding(horizontal = 10.dp, vertical = 7.dp)
                 ) {
-                    TextButton(
-                        onClick  = { isMenuExpanded = false },
-                        colors   = ButtonDefaults.textButtonColors(contentColor = CToggleOn),
-                        modifier = Modifier.align(Alignment.CenterStart),
-                    ) {
-                        Text(
-                            "✕  CLOSE",
-                            fontWeight    = FontWeight.Bold,
-                            fontSize      = 12.sp,
-                            letterSpacing = 1.sp,
-                        )
-                    }
+                    Text(
+                        text          = "[ close ]",
+                        color         = ITextDim,
+                        fontSize      = 11.sp,
+                        fontFamily    = FontFamily.Monospace,
+                        letterSpacing = 0.5.sp,
+                    )
                 }
             }
         }
-
     }
     } // MaterialTheme
 }
@@ -451,126 +456,134 @@ fun FloatingMenu(
 //  Feature row dispatcher
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun FeatureRow(
-    item: FeatureItem,
-    overlayRequired: Boolean,
-    isScrollExpanded: MutableState<Boolean>,
-    onCloseSettings: () -> Unit,
-    onForceLoad: () -> Unit,
+private fun IGuiFeatureRow(
+    item             : FeatureItem,
+    overlayRequired  : Boolean,
+    isScrollExpanded : MutableState<Boolean>,
+    onCloseSettings  : () -> Unit,
+    onForceLoad      : () -> Unit,
 ) {
     when (item) {
-        is FeatureItem.Toggle           -> ToggleRow(item, isScrollExpanded)
-        is FeatureItem.SeekBarItem      -> SeekBarRow(item)
-        is FeatureItem.ButtonItem       -> ButtonRow(
+        is FeatureItem.Toggle           -> IGuiToggleRow(item, isScrollExpanded)
+        is FeatureItem.SeekBarItem      -> IGuiSeekBarRow(item)
+        is FeatureItem.ButtonItem       -> IGuiButtonRow(
             name            = item.name,
             featNum         = item.featNum,
             onSpecialAction = onForceLoad,
             onCloseSettings = onCloseSettings,
         )
-        is FeatureItem.ButtonOnOff      -> ButtonOnOffRow(item)
-        is FeatureItem.SpinnerItem      -> SpinnerRow(item)
-        is FeatureItem.InputText        -> InputTextRow(item, overlayRequired)
-        is FeatureItem.InputValue       -> InputValueRow(item, overlayRequired)
-        is FeatureItem.CheckBoxItem     -> CheckBoxRow(item)
-        is FeatureItem.RadioButtonGroup -> RadioButtonRow(item)
-        is FeatureItem.CollapseSection  -> CollapseSectionRow(
+        is FeatureItem.ButtonOnOff      -> IGuiButtonOnOffRow(item)
+        is FeatureItem.SpinnerItem      -> IGuiSpinnerRow(item)
+        is FeatureItem.InputText        -> IGuiInputTextRow(item, overlayRequired)
+        is FeatureItem.InputValue       -> IGuiInputValueRow(item, overlayRequired)
+        is FeatureItem.CheckBoxItem     -> IGuiCheckBoxRow(item)
+        is FeatureItem.RadioButtonGroup -> IGuiRadioButtonRow(item)
+        is FeatureItem.CollapseSection  -> IGuiCollapseSectionRow(
             item             = item,
             overlayRequired  = overlayRequired,
             isScrollExpanded = isScrollExpanded,
             onCloseSettings  = onCloseSettings,
             onForceLoad      = onForceLoad,
         )
-        is FeatureItem.ButtonLink    -> ButtonLinkRow(item)
-        is FeatureItem.CategoryLabel -> CategoryRow(item.text)
-        is FeatureItem.RichTextLabel -> RichTextRow(item.text)
-        is FeatureItem.RichWebLabel  -> RichWebRow(item.text)
+        is FeatureItem.ButtonLink    -> IGuiButtonLinkRow(item)
+        is FeatureItem.CategoryLabel -> IGuiCategoryRow(item.text)
+        is FeatureItem.RichTextLabel -> IGuiRichTextRow(item.text)
+        is FeatureItem.RichWebLabel  -> IGuiRichWebRow(item.text)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Toggle (Switch)
+//  Toggle row — ImGui checkbox + label
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun ToggleRow(
+private fun IGuiToggleRow(
     item: FeatureItem.Toggle,
     isScrollExpanded: MutableState<Boolean>,
 ) {
     var checked by remember {
         mutableStateOf(Preferences.loadPrefBool(item.name, item.featNum, item.defaultOn))
     }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (checked) CBtnOn.copy(alpha = 0.18f) else Color.Transparent)
-            .padding(start = 12.dp, top = 3.dp, bottom = 3.dp, end = 6.dp),
+            .noRippleClickable {
+                val next = !checked
+                checked = next
+                when (item.featNum) {
+                    -1 -> {
+                        Preferences.with(Preferences.context!!).writeBoolean(-1, next)
+                        if (!next) Preferences.with(Preferences.context!!).clear()
+                    }
+                    -3 -> {
+                        Preferences.isExpanded = next
+                        isScrollExpanded.value = next
+                        Preferences.changeFeatureBool(item.name, item.featNum, next)
+                    }
+                    else -> Preferences.changeFeatureBool(item.name, item.featNum, next)
+                }
+            }
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Green left-edge indicator when ON
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .height(28.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(if (checked) CToggleOn else Color.Transparent)
-        )
+        ImGuiCheckbox(checked = checked, onCheckedChange = { next ->
+            checked = next
+            when (item.featNum) {
+                -1 -> {
+                    Preferences.with(Preferences.context!!).writeBoolean(-1, next)
+                    if (!next) Preferences.with(Preferences.context!!).clear()
+                }
+                -3 -> {
+                    Preferences.isExpanded = next
+                    isScrollExpanded.value = next
+                    Preferences.changeFeatureBool(item.name, item.featNum, next)
+                }
+                else -> Preferences.changeFeatureBool(item.name, item.featNum, next)
+            }
+        })
         Spacer(Modifier.width(8.dp))
         Text(
             text     = item.name,
-            color    = if (checked) CText else CTextSub,
-            fontSize = 13.sp,
+            color    = if (checked) IText else ITextDim,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
             modifier = Modifier.weight(1f),
         )
-        Switch(
-            checked         = checked,
-            onCheckedChange = { value ->
-                checked = value
-                when (item.featNum) {
-                    -1 -> {
-                        Preferences.with(Preferences.context!!).writeBoolean(-1, value)
-                        if (!value) Preferences.with(Preferences.context!!).clear()
-                    }
-                    -3 -> {
-                        Preferences.isExpanded = value
-                        isScrollExpanded.value = value
-                        Preferences.changeFeatureBool(item.name, item.featNum, value)
-                    }
-                    else -> Preferences.changeFeatureBool(item.name, item.featNum, value)
-                }
-            },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor   = CToggleOn,
-                checkedTrackColor   = CToggleOn.copy(alpha = 0.30f),
-                uncheckedThumbColor = CToggleOff,
-                uncheckedTrackColor = CToggleOff.copy(alpha = 0.30f),
-            ),
-            modifier = Modifier.padding(end = 4.dp),
-        )
+        if (checked) {
+            Text(
+                text       = "ON",
+                color      = IAccent,
+                fontSize   = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SeekBar → Slider
+//  SeekBar → flat Slider
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun SeekBarRow(item: FeatureItem.SeekBarItem) {
+private fun IGuiSeekBarRow(item: FeatureItem.SeekBarItem) {
     val loaded = Preferences.loadPrefInt(item.name, item.featNum)
     var value  by remember { mutableStateOf((if (loaded == 0) item.min else loaded).toFloat()) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, top = 6.dp, bottom = 4.dp, end = 10.dp)
+            .padding(horizontal = 8.dp, top = 5.dp, bottom = 2.dp)
     ) {
         Row(
             modifier              = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(item.name, color = CTextSub, fontSize = 13.sp)
+            Text(item.name, color = ITextDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             Text(
                 text       = value.toInt().toString(),
-                color      = CToggleOn,
-                fontSize   = 13.sp,
+                color      = IAccent,
+                fontSize   = 11.sp,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
             )
         }
@@ -582,140 +595,132 @@ private fun SeekBarRow(item: FeatureItem.SeekBarItem) {
             },
             valueRange = item.min.toFloat()..item.max.toFloat(),
             colors     = SliderDefaults.colors(
-                thumbColor         = CToggleOn,
-                activeTrackColor   = CToggleOn,
-                inactiveTrackColor = CToggleOn.copy(alpha = 0.20f),
+                thumbColor         = IAccent,
+                activeTrackColor   = IAccent,
+                inactiveTrackColor = IBorderMute,
             ),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(28.dp),
         )
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Button
+//  Button — flat, 1px border, monospace label
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun ButtonRow(
-    name: String,
-    featNum: Int,
-    onSpecialAction: () -> Unit = {},
-    onCloseSettings: () -> Unit = {},
+private fun IGuiButtonRow(
+    name            : String,
+    featNum         : Int,
+    onSpecialAction : () -> Unit = {},
+    onCloseSettings : () -> Unit = {},
 ) {
-    OutlinedButton(
-        onClick = {
-            when (featNum) {
-                -6   -> onCloseSettings()
-                -100 -> onSpecialAction()
-            }
-            Preferences.changeFeatureInt(name, featNum, 0)
-        },
+    Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = CTextSub),
-        border = BorderStroke(1.dp, CBorder.copy(alpha = 0.5f)),
-        shape  = RoundedCornerShape(6.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .background(IButtonBg)
+            .border(1.dp, IBorderMute)
+            .noRippleClickable {
+                when (featNum) {
+                    -6   -> onCloseSettings()
+                    -100 -> onSpecialAction()
+                }
+                Preferences.changeFeatureInt(name, featNum, 0)
+            }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
-        Text(text = name, fontSize = 13.sp)
+        Text(
+            text       = name,
+            color      = ITextDim,
+            fontSize   = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            textAlign  = TextAlign.Center,
+        )
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ButtonOnOff — animated ON/OFF toggle button
+//  ButtonOnOff — accent border when ON, muted when OFF
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun ButtonOnOffRow(item: FeatureItem.ButtonOnOff) {
+private fun IGuiButtonOnOffRow(item: FeatureItem.ButtonOnOff) {
     var isOn by remember {
         mutableStateOf(Preferences.loadPrefBool(item.name, item.featNum, item.defaultOn))
     }
-    val animColor by animateColorAsState(
-        targetValue   = if (isOn) CToggleOn.copy(alpha = 0.20f) else CBtnOff,
-        animationSpec = tween(200),
-        label         = "btnOnOffColor",
-    )
-    val borderColor by animateColorAsState(
-        targetValue   = if (isOn) CToggleOn else CBorder.copy(alpha = 0.3f),
-        animationSpec = tween(200),
-        label         = "btnOnOffBorder",
-    )
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(
-        targetValue   = if (pressed) 0.96f else 1f,
-        animationSpec = tween(80),
-        label         = "btnScale",
-    )
-
-    Button(
-        onClick = {
-            pressed = true
-            isOn    = !isOn
-            Preferences.changeFeatureBool(item.name, item.featNum, isOn)
-            pressed = false
-        },
-        modifier  = Modifier
+    Row(
+        modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-            .scale(scale),
-        colors    = ButtonDefaults.buttonColors(containerColor = animColor),
-        border    = BorderStroke(1.dp, borderColor),
-        shape     = RoundedCornerShape(6.dp),
-        elevation = ButtonDefaults.buttonElevation(0.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .background(if (isOn) IAccentDark else IButtonBg)
+            .border(1.dp, if (isOn) IAccent else IBorderMute)
+            .noRippleClickable {
+                isOn = !isOn
+                Preferences.changeFeatureBool(item.name, item.featNum, isOn)
+            }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment     = Alignment.CenterVertically,
     ) {
         Text(
-            text       = "${item.name}: ${if (isOn) "ON" else "OFF"}",
-            color      = if (isOn) CToggleOn else CTextSub,
-            fontSize   = 13.sp,
-            fontWeight = if (isOn) FontWeight.SemiBold else FontWeight.Normal,
+            text       = item.name,
+            color      = if (isOn) IText else ITextDim,
+            fontSize   = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier   = Modifier.weight(1f),
+        )
+        Text(
+            text       = if (isOn) "ON " else "OFF",
+            color      = if (isOn) IAccent else ITextDim,
+            fontSize   = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = if (isOn) FontWeight.Bold else FontWeight.Normal,
         )
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Spinner → ExposedDropdownMenuBox
+//  Spinner → simple dropdown
 // ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SpinnerRow(item: FeatureItem.SpinnerItem) {
+private fun IGuiSpinnerRow(item: FeatureItem.SpinnerItem) {
     var selectedIndex by remember {
         mutableStateOf(Preferences.loadPrefInt(item.name, item.featNum))
     }
     var expanded by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-        Text(
-            text     = item.name,
-            color    = CTextSub,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(start = 2.dp, bottom = 2.dp),
-        )
-        ExposedDropdownMenuBox(
-            expanded         = expanded,
-            onExpandedChange = { expanded = !expanded },
-        ) {
+    Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) {
+        Text(item.name, color = ITextDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.padding(bottom = 2.dp))
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
             OutlinedTextField(
                 value         = item.options.getOrElse(selectedIndex) { "" },
                 onValueChange = {},
                 readOnly      = true,
                 trailingIcon  = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                 colors        = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor        = CText,
-                    unfocusedTextColor      = CTextSub,
-                    focusedBorderColor      = CToggleOn,
-                    unfocusedBorderColor    = CBtnBg,
-                    focusedContainerColor   = CBtnBg,
-                    unfocusedContainerColor = CBtnBg,
+                    focusedTextColor        = IText,
+                    unfocusedTextColor      = ITextDim,
+                    focusedBorderColor      = IAccent,
+                    unfocusedBorderColor    = IBorderMute,
+                    focusedContainerColor   = IFrameBg,
+                    unfocusedContainerColor = IFrameBg,
                 ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
+                textStyle = LocalTextStyle.current.copy(
+                    fontSize   = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                modifier = Modifier.fillMaxWidth().menuAnchor(),
             )
-            ExposedDropdownMenu(
-                expanded         = expanded,
-                onDismissRequest = { expanded = false },
-            ) {
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 item.options.forEachIndexed { index, option ->
                     DropdownMenuItem(
-                        text    = { Text(option, color = CTextSub) },
+                        text    = { Text(option, color = ITextDim, fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace) },
                         onClick = {
                             selectedIndex = index
                             expanded      = false
@@ -726,32 +731,38 @@ private fun SpinnerRow(item: FeatureItem.SpinnerItem) {
             }
         }
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  InputValue — number input with AlertDialog
+//  InputValue — number input
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun InputValueRow(item: FeatureItem.InputValue, overlayRequired: Boolean) {
+private fun IGuiInputValueRow(item: FeatureItem.InputValue, overlayRequired: Boolean) {
     val loaded     = Preferences.loadPrefInt(item.name, item.featNum)
     var current    by remember { mutableStateOf(if (loaded == 0) 1 else loaded) }
     var showDialog by remember { mutableStateOf(false) }
 
-    OutlinedButton(
-        onClick  = { showDialog = true },
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = CTextSub),
-        border = BorderStroke(1.dp, CBorder.copy(alpha = 0.4f)),
-        shape  = RoundedCornerShape(6.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .background(IButtonBg)
+            .border(1.dp, IBorderMute)
+            .noRippleClickable { showDialog = true }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text("${item.name}: $current", fontSize = 13.sp)
+        Text(item.name, color = ITextDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(1f))
+        Text("$current", color = IAccent, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold)
     }
+    ImGuiSeparator()
 
     if (showDialog) {
-        NumberInputDialog(
-            hint            = if (item.maxValue != 0) "Max: ${item.maxValue}" else "",
+        IGuiNumberInputDialog(
+            hint            = if (item.maxValue != 0) "max: ${item.maxValue}" else "",
             overlayRequired = overlayRequired,
             onConfirm       = { raw ->
                 val num = try {
@@ -770,27 +781,38 @@ private fun InputValueRow(item: FeatureItem.InputValue, overlayRequired: Boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  InputText — string input with AlertDialog
+//  InputText — string input
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun InputTextRow(item: FeatureItem.InputText, overlayRequired: Boolean) {
+private fun IGuiInputTextRow(item: FeatureItem.InputText, overlayRequired: Boolean) {
     var current    by remember { mutableStateOf(Preferences.loadPrefString(item.name, item.featNum)) }
     var showDialog by remember { mutableStateOf(false) }
 
-    OutlinedButton(
-        onClick  = { showDialog = true },
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = CTextSub),
-        border = BorderStroke(1.dp, CBorder.copy(alpha = 0.4f)),
-        shape  = RoundedCornerShape(6.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .background(IButtonBg)
+            .border(1.dp, IBorderMute)
+            .noRippleClickable { showDialog = true }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text("${item.name}: $current", fontSize = 13.sp)
+        Text(item.name, color = ITextDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(1f))
+        Text(
+            text     = current.take(12),
+            color    = IAccent,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            overflow = TextOverflow.Ellipsis,
+            maxLines = 1,
+        )
     }
+    ImGuiSeparator()
 
     if (showDialog) {
-        TextInputDialog(
+        IGuiTextInputDialog(
             overlayRequired = overlayRequired,
             onConfirm       = { str ->
                 current = str
@@ -803,139 +825,141 @@ private fun InputTextRow(item: FeatureItem.InputText, overlayRequired: Boolean) 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CheckBox
+//  CheckBox row (uses ImGuiCheckbox)
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun CheckBoxRow(item: FeatureItem.CheckBoxItem) {
+private fun IGuiCheckBoxRow(item: FeatureItem.CheckBoxItem) {
     var checked by remember {
         mutableStateOf(Preferences.loadPrefBool(item.name, item.featNum, item.defaultOn))
     }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
+            .noRippleClickable {
                 checked = !checked
                 Preferences.changeFeatureBool(item.name, item.featNum, checked)
             }
-            .background(if (checked) CBtnOn.copy(alpha = 0.12f) else Color.Transparent)
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(
-            checked         = checked,
-            onCheckedChange = { value ->
-                checked = value
-                Preferences.changeFeatureBool(item.name, item.featNum, value)
-            },
-            colors = CheckboxDefaults.colors(
-                checkedColor   = CToggleOn,
-                uncheckedColor = CTextSub,
-                checkmarkColor = Color.Black,
-            ),
-        )
+        ImGuiCheckbox(checked = checked, onCheckedChange = { v ->
+            checked = v
+            Preferences.changeFeatureBool(item.name, item.featNum, v)
+        })
         Spacer(Modifier.width(8.dp))
         Text(
-            text     = item.name,
-            color    = if (checked) CText else CTextSub,
-            fontSize = 13.sp,
+            text       = item.name,
+            color      = if (checked) IText else ITextDim,
+            fontSize   = 12.sp,
+            fontFamily = FontFamily.Monospace,
         )
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  RadioButton group
+//  RadioButton group — ImGui-style filled dot
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun RadioButtonRow(item: FeatureItem.RadioButtonGroup) {
+private fun IGuiRadioButtonRow(item: FeatureItem.RadioButtonGroup) {
     var selectedIndex by remember {
         mutableStateOf(Preferences.loadPrefInt(item.name, item.featNum))
     }
-    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-        val label = item.options.getOrElse(selectedIndex) { "" }
+    Column(modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp)) {
         Text(
-            text       = if (label.isNotEmpty()) "${item.name}: $label" else "${item.name}:",
-            color      = CTextSub,
-            fontSize   = 13.sp,
+            text       = item.name,
+            color      = ITextDim,
+            fontSize   = 11.sp,
+            fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.SemiBold,
+            modifier   = Modifier.padding(bottom = 3.dp),
         )
         item.options.forEachIndexed { index, option ->
+            val sel = selectedIndex == index
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier          = Modifier
+                modifier = Modifier
                     .fillMaxWidth()
-                    .clickable {
+                    .noRippleClickable {
                         selectedIndex = index
                         Preferences.changeFeatureInt(item.name, item.featNum, index)
                     }
+                    .padding(vertical = 3.dp)
             ) {
-                RadioButton(
-                    selected = selectedIndex == index,
-                    onClick  = {
-                        selectedIndex = index
-                        Preferences.changeFeatureInt(item.name, item.featNum, index)
-                    },
-                    colors = RadioButtonDefaults.colors(selectedColor = CToggleOn),
-                )
-                Text(text = option, color = CTextSub, fontSize = 13.sp)
+                // Small circle dot
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(13.dp)
+                        .border(1.dp, if (sel) IAccent else IBorderMute)
+                        .background(if (sel) IAccent else IFrameBg)
+                ) {
+                    if (sel) {
+                        Box(Modifier.size(5.dp).background(Color.Black))
+                    }
+                }
+                Spacer(Modifier.width(7.dp))
+                Text(option, color = if (sel) IText else ITextDim, fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace)
             }
         }
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Collapse section
+//  Collapse section — ImGui CollapsingHeader style
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun CollapseSectionRow(
-    item: FeatureItem.CollapseSection,
-    overlayRequired: Boolean,
-    isScrollExpanded: MutableState<Boolean>,
-    onCloseSettings: () -> Unit,
-    onForceLoad: () -> Unit,
+private fun IGuiCollapseSectionRow(
+    item             : FeatureItem.CollapseSection,
+    overlayRequired  : Boolean,
+    isScrollExpanded : MutableState<Boolean>,
+    onCloseSettings  : () -> Unit,
+    onForceLoad      : () -> Unit,
 ) {
     var isOpen by remember { mutableStateOf(item.startExpanded) }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Box(
-            contentAlignment = Alignment.Center,
+    // Header: left-aligned caret + text, no gradient, slight bg shift
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(ITitleBg)
+            .noRippleClickable { isOpen = !isOpen }
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text       = if (isOpen) "▾" else "▸",
+            color      = IAccent,
+            fontSize   = 11.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text       = item.text,
+            color      = IText,
+            fontSize   = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+    ImGuiSeparator()
+
+    AnimatedVisibility(visible = isOpen) {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(CCategoryBg)
-                .clickable { isOpen = !isOpen }
-                .padding(vertical = 12.dp),
+                .background(IColBg)
         ) {
-            Row(
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text  = if (isOpen) "▲ " else "▼ ",
-                    color = CToggleOn, fontSize = 11.sp,
+            item.children.forEach { child ->
+                IGuiFeatureRow(
+                    item             = child,
+                    overlayRequired  = overlayRequired,
+                    isScrollExpanded = isScrollExpanded,
+                    onCloseSettings  = onCloseSettings,
+                    onForceLoad      = onForceLoad,
                 )
-                Text(
-                    text       = item.text,
-                    color      = CText,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize   = 13.sp,
-                )
-            }
-        }
-        AnimatedVisibility(visible = isOpen) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(CCollapseBg)
-                    .padding(vertical = 4.dp)
-            ) {
-                item.children.forEach { child ->
-                    FeatureRow(
-                        item             = child,
-                        overlayRequired  = overlayRequired,
-                        isScrollExpanded = isScrollExpanded,
-                        onCloseSettings  = onCloseSettings,
-                        onForceLoad      = onForceLoad,
-                    )
-                }
             }
         }
     }
@@ -945,96 +969,98 @@ private fun CollapseSectionRow(
 //  ButtonLink
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun ButtonLinkRow(item: FeatureItem.ButtonLink) {
+private fun IGuiButtonLinkRow(item: FeatureItem.ButtonLink) {
     val context = LocalContext.current
-    OutlinedButton(
-        onClick = {
-            context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(item.url)).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-            )
-        },
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = CToggleOn),
-        border = BorderStroke(1.dp, CToggleOn.copy(alpha = 0.6f)),
-        shape  = RoundedCornerShape(6.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .background(IButtonBg)
+            .border(1.dp, IAccent.copy(alpha = 0.35f))
+            .noRippleClickable {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(item.url)).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                )
+            }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment     = Alignment.CenterVertically,
     ) {
-        Text("🔗 ${item.name}", fontSize = 13.sp)
+        Text(item.name, color = IAccent, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        Text("→", color = IAccent, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Category header
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun CategoryRow(text: String) {
+private fun IGuiCategoryRow(text: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CCategoryBg)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .background(ICatBg)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .height(14.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(CToggleOn)
-        )
-        Spacer(Modifier.width(8.dp))
+        Box(Modifier.width(2.dp).height(11.dp).background(IAccent))
+        Spacer(Modifier.width(6.dp))
         Text(
-            text       = text,
-            color      = CText,
-            fontWeight = FontWeight.SemiBold,
-            fontSize   = 12.sp,
+            text       = text.uppercase(),
+            color      = IAccent,
+            fontSize   = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.8.sp,
         )
     }
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  RichText plain label
+//  Rich text label
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun RichTextRow(text: String) {
+private fun IGuiRichTextRow(text: String) {
     Text(
-        text     = text,
-        color    = CTextSub,
-        fontSize = 12.sp,
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+        text       = text,
+        color      = ITextDim,
+        fontSize   = 11.sp,
+        fontFamily = FontFamily.Monospace,
+        modifier   = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
     )
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  RichWebView — HTML rendered via AndroidView + WebView
+//  Rich WebView label
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun RichWebRow(html: String) {
+private fun IGuiRichWebRow(html: String) {
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
                 setBackgroundColor(0x00000000)
-                setPadding(0, 5, 0, 5)
+                setPadding(8, 4, 8, 4)
                 loadData(html, "text/html", "utf-8")
             }
         },
-        modifier = Modifier
-            .fillMaxWidth()
-            .wrapContentHeight(),
+        modifier = Modifier.fillMaxWidth().wrapContentHeight(),
     )
+    ImGuiSeparator()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Dialog helpers — set TYPE_APPLICATION_OVERLAY when in overlay mode
+//  Dialog helpers
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun OverlayAwareDialog(
-    overlayRequired: Boolean,
-    onDismiss: () -> Unit,
-    content: @Composable () -> Unit,
+    overlayRequired : Boolean,
+    onDismiss       : () -> Unit,
+    content         : @Composable () -> Unit,
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -1057,104 +1083,129 @@ private fun OverlayAwareDialog(
 }
 
 @Composable
-private fun NumberInputDialog(
-    hint: String,
-    overlayRequired: Boolean,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
+private fun IGuiNumberInputDialog(
+    hint            : String,
+    overlayRequired : Boolean,
+    onConfirm       : (String) -> Unit,
+    onDismiss       : () -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
     OverlayAwareDialog(overlayRequired = overlayRequired, onDismiss = onDismiss) {
-        Surface(
-            shape    = RoundedCornerShape(14.dp),
-            color    = CMenuBg,
-            border   = BorderStroke(1.dp, CBorder.copy(alpha = 0.6f)),
-            modifier = Modifier.padding(16.dp),
+        Column(
+            modifier = Modifier
+                .padding(24.dp)
+                .background(IBg)
+                .border(1.dp, IBorderMute)
+                .padding(16.dp)
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text("Enter number", color = CText, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value           = text,
-                    onValueChange   = { text = it },
-                    placeholder     = {
-                        if (hint.isNotEmpty())
-                            Text(hint, color = CTextSub.copy(alpha = 0.55f), fontSize = 12.sp)
-                    },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine      = true,
-                    colors          = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor     = CText,
-                        unfocusedTextColor   = CText,
-                        focusedBorderColor   = CToggleOn,
-                        unfocusedBorderColor = CTextSub.copy(alpha = 0.30f),
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(14.dp))
-                Row(
-                    horizontalArrangement = Arrangement.End,
-                    modifier              = Modifier.fillMaxWidth(),
-                ) {
-                    TextButton(onClick = onDismiss) { Text("Cancel", color = CTextSub) }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { onConfirm(text) },
-                        colors  = ButtonDefaults.buttonColors(containerColor = CToggleOn),
-                        shape   = RoundedCornerShape(8.dp),
-                    ) {
-                        Text("OK", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
-                }
+            Text("> enter value", color = IAccent, fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value           = text,
+                onValueChange   = { text = it },
+                placeholder     = {
+                    if (hint.isNotEmpty())
+                        Text(hint, color = ITextDim, fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace)
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine      = true,
+                textStyle       = LocalTextStyle.current.copy(
+                    color      = IText,
+                    fontSize   = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                colors          = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor      = IAccent,
+                    unfocusedBorderColor    = IBorderMute,
+                    focusedContainerColor   = IFrameBg,
+                    unfocusedContainerColor = IFrameBg,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .background(IButtonBg)
+                        .border(1.dp, IBorderMute)
+                        .noRippleClickable(onDismiss)
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) { Text("cancel", color = ITextDim, fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace) }
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .background(IAccentDark)
+                        .border(1.dp, IAccent)
+                        .noRippleClickable { onConfirm(text) }
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) { Text("ok", color = IAccent, fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
             }
         }
     }
 }
 
 @Composable
-private fun TextInputDialog(
-    overlayRequired: Boolean,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
+private fun IGuiTextInputDialog(
+    overlayRequired : Boolean,
+    onConfirm       : (String) -> Unit,
+    onDismiss       : () -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
     OverlayAwareDialog(overlayRequired = overlayRequired, onDismiss = onDismiss) {
-        Surface(
-            shape    = RoundedCornerShape(14.dp),
-            color    = CMenuBg,
-            border   = BorderStroke(1.dp, CBorder.copy(alpha = 0.6f)),
-            modifier = Modifier.padding(16.dp),
+        Column(
+            modifier = Modifier
+                .padding(24.dp)
+                .background(IBg)
+                .border(1.dp, IBorderMute)
+                .padding(16.dp)
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text("Enter text", color = CText, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value         = text,
-                    onValueChange = { text = it },
-                    singleLine    = true,
-                    colors        = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor     = CText,
-                        unfocusedTextColor   = CText,
-                        focusedBorderColor   = CToggleOn,
-                        unfocusedBorderColor = CTextSub.copy(alpha = 0.30f),
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(14.dp))
-                Row(
-                    horizontalArrangement = Arrangement.End,
-                    modifier              = Modifier.fillMaxWidth(),
-                ) {
-                    TextButton(onClick = onDismiss) { Text("Cancel", color = CTextSub) }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { onConfirm(text) },
-                        colors  = ButtonDefaults.buttonColors(containerColor = CToggleOn),
-                        shape   = RoundedCornerShape(8.dp),
-                    ) {
-                        Text("OK", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
-                }
+            Text("> enter text", color = IAccent, fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value         = text,
+                onValueChange = { text = it },
+                singleLine    = true,
+                textStyle     = LocalTextStyle.current.copy(
+                    color      = IText,
+                    fontSize   = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                colors        = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor      = IAccent,
+                    unfocusedBorderColor    = IBorderMute,
+                    focusedContainerColor   = IFrameBg,
+                    unfocusedContainerColor = IFrameBg,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .background(IButtonBg)
+                        .border(1.dp, IBorderMute)
+                        .noRippleClickable(onDismiss)
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) { Text("cancel", color = ITextDim, fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace) }
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .background(IAccentDark)
+                        .border(1.dp, IAccent)
+                        .noRippleClickable { onConfirm(text) }
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) { Text("ok", color = IAccent, fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
             }
         }
     }
