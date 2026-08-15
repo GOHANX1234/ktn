@@ -98,7 +98,7 @@ workflows:
       java: 17
       vars:
         NDK_VERSION:        "22.0.7026061"
-        KEYSTORE_PATH:      "/home/builder/s3hacks-release.keystore"
+        KEYSTORE_PATH:      "s3hacks-release.keystore"
         KEY_ALIAS:          "s3hacks"
         KEY_PASSWORD:       "S3HacksKey2024!"
         STORE_PASSWORD:     "S3HacksStore2024!"
@@ -133,9 +133,11 @@ workflows:
       - name: Generate release keystore
         script: |
           set -e
+          mkdir -p "$(dirname "$KEYSTORE_PATH")"
           keytool \
             -genkeypair \
             -v \
+            -storetype JKS \
             -keystore  "$KEYSTORE_PATH" \
             -alias     "$KEY_ALIAS" \
             -keyalg    RSA \
