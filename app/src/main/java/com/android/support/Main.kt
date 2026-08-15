@@ -7,7 +7,7 @@ object Main {
 
     // Load native library (name must match Android.mk)
     init {
-        System.loadLibrary("MyLibName")
+        System.loadLibrary("clerx")
     }
 
     @JvmStatic private external fun CheckOverlayPermission(context: Context)

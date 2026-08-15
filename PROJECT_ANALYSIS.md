@@ -39,7 +39,7 @@
 
 ## 1. Project Overview
 
-This is a **floating overlay mod menu** injected into Android Unity/il2cpp games — specifically customized for **Call of Duty: Mobile**. It compiles into a shared native library (`libMyLibName.so`) which is loaded via `System.loadLibrary()` at runtime. The mod menu floats on top of the game window using Android's `SYSTEM_ALERT_WINDOW` overlay permission.
+This is a **floating overlay mod menu** injected into Android Unity/il2cpp games — specifically customized for **Call of Duty: Mobile**. It compiles into a shared native library (`libclerx.so`) which is loaded via `System.loadLibrary()` at runtime. The mod menu floats on top of the game window using Android's `SYSTEM_ALERT_WINDOW` overlay permission.
 
 The Android application layer has been **fully rewritten from Java to Kotlin**, and the floating UI has been rebuilt with **Jetpack Compose** (Material 3) instead of the original programmatic View system. The native C++ layer is unchanged.
 
@@ -140,7 +140,7 @@ Repositories: google(), mavenCentral()
 | `APP_PIE` | `true` |
 
 ### `Android.mk` (NDK)
-The main module name is **`MyLibName`** (maps to `libMyLibName.so`).
+The main module name is **`clerx`** (maps to `libclerx.so`).
 
 **Compiler flags:**
 ```
@@ -198,7 +198,7 @@ Android-Mod-Menu/
         ├── ic_launcher-playstore.png   # Play Store icon
         │
         ├── assets/
-        │   └── S3PNG.ttf              # Custom font (S3 Hacks branding)
+        │   └── clerx.ttf              # Custom font asset
         │
         ├── java/com/android/support/   # (package path kept; all files are .kt)
         │   ├── MainActivity.kt         # Entry point Activity; launches game + menu
@@ -325,7 +325,7 @@ Android-Mod-Menu/
 **Kotlin type:** `object` (singleton — no instantiation needed, replaces static methods in Java).
 
 **What it does:**
-- `init { }` block: `System.loadLibrary("MyLibName")` — loads `libMyLibName.so` on first access
+- `init { }` block: `System.loadLibrary("clerx")` — loads `libclerx.so` on first access
 - `Start(context)`: Calls `CrashHandler.init(context, false)` then the native `CheckOverlayPermission(context)`
 - `StartWithoutPermission(context)`: Alternative start path — if already in an Activity context, creates `MenuOverlay` directly and calls `setWindowManagerActivity()` instead of going through the Service
 
@@ -1260,8 +1260,8 @@ Save location:
 
 ## 20. Assets & Resources
 
-### Font: `S3PNG.ttf`
-A custom TrueType font stored in `assets/` under the name `S3PNG.ttf`. Available to load with `Typeface.createFromAsset()` in an `AndroidView` composable if needed for branding. The current Compose UI does not load it (default fonts are used).
+### Font: `clerx.ttf`
+A custom TrueType font stored in `assets/` under the name `clerx.ttf`. Available to load with `Typeface.createFromAsset()` in an `AndroidView` composable if needed for branding. The current Compose UI does not load it (default fonts are used).
 
 ### Icons: `ic_launcher` (mipmap densities)
 Standard Android adaptive icons. The round and square variants exist in hdpi, mdpi, xhdpi, xxhdpi, xxxhdpi, plus an anydpi-v26 adaptive version.
@@ -1298,9 +1298,7 @@ Standard Android theme/color resources. The overlay UI ignores these and uses ha
 A `codemagic.yaml` is included in the project root. Push to the connected repository to trigger a cloud build. The pipeline handles NDK installation, Gradle sync, and APK signing automatically.
 
 ### Changing the Library Name
-If you want to rename the native library (e.g., from `MyLibName` to `GameHacks`):
-1. In `Android.mk`: change `LOCAL_MODULE := MyLibName`
-2. In `Main.kt`: change `System.loadLibrary("MyLibName")`
+The native library is named `clerx` in `Android.mk` and loaded with `System.loadLibrary("clerx")` in `Main.kt`.
 Both must match exactly.
 
 ### Adding a New Feature
