@@ -133,12 +133,13 @@ workflows:
       - name: Generate release keystore
         script: |
           set -e
-          mkdir -p "$(dirname "$KEYSTORE_PATH")"
+          KEYSTORE_FILE="$CM_BUILD_DIR/$KEYSTORE_PATH"
+          mkdir -p "$(dirname "$KEYSTORE_FILE")"
           keytool \
             -genkeypair \
             -v \
             -storetype JKS \
-            -keystore  "$KEYSTORE_PATH" \
+            -keystore  "$KEYSTORE_FILE" \
             -alias     "$KEY_ALIAS" \
             -keyalg    RSA \
             -keysize   2048 \
@@ -146,9 +147,9 @@ workflows:
             -storepass "$STORE_PASSWORD" \
             -keypass   "$KEY_PASSWORD" \
             -dname     "$KEY_DNAME"
-          echo "Keystore generated at $KEYSTORE_PATH"
+          echo "Keystore generated at $KEYSTORE_FILE"
           keytool -list -v \
-            -keystore  "$KEYSTORE_PATH" \
+            -keystore  "$KEYSTORE_FILE" \
             -storepass "$STORE_PASSWORD" \
             -alias     "$KEY_ALIAS" \
             | grep -E "Alias|Valid|SHA"
@@ -175,10 +176,11 @@ workflows:
 
       - name: Build and sign release APK
         script: |
+          KEYSTORE_FILE="$CM_BUILD_DIR/$KEYSTORE_PATH"
           ./gradlew assembleRelease \
             --no-daemon \
             --stacktrace \
-            -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
+            -Pandroid.injected.signing.store.file="$KEYSTORE_FILE" \
             -Pandroid.injected.signing.store.password="$STORE_PASSWORD" \
             -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
@@ -192,7 +194,8 @@ workflows:
 
       - name: Copy keystore next to APK for export
         script: |
-          cp "$KEYSTORE_PATH" app/build/outputs/apk/release/s3hacks-release.keystore
+          KEYSTORE_FILE="$CM_BUILD_DIR/$KEYSTORE_PATH"
+          cp "$KEYSTORE_FILE" app/build/outputs/apk/release/s3hacks-release.keystore
           echo "Keystore copied — download it from Artifacts to keep a consistent key for future builds"
 
     artifacts:
