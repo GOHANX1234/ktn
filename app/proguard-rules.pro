@@ -20,7 +20,7 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 #-dontobfuscate
--keepclassmembers class ** {
-   public static void Start (***);
-}
--keep public class com.android.support.MainActivity
+# These classes are resolved by name and registered from JNI_OnLoad.
+-keep class com.android.support.Menu { *; }
+-keep class com.android.support.Preferences { *; }
+-keep class com.android.support.Main { *; }
